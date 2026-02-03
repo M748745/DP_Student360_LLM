@@ -42,7 +42,7 @@ def call_ollama_api(prompt: str, model: str, ollama_url: str, temperature: float
     try:
         # Determine timeout based on URL type
         is_remote = "cloudflare" in ollama_url.lower() or "https://" in ollama_url.lower()
-        timeout = 180 if is_remote else 60  # Longer timeout for Cloudflare
+        timeout = 300 if is_remote else 60  # 5 minutes for Cloudflare (increased for Streamlit Cloud)
 
         payload = {
             "model": model,
@@ -141,6 +141,7 @@ Analyze the data patterns and discover 6-8 entities that have lifecycles. Base y
 - Be creative - discover what's actually in the data"""
 
     try:
+        print(f"🔄 Calling LLM for autonomous entity discovery...")
         entities_json = call_ollama_api(
             prompt=prompt,
             model=ollama_model,
@@ -149,19 +150,30 @@ Analyze the data patterns and discover 6-8 entities that have lifecycles. Base y
             num_predict=2500
         ).strip()
 
+        print(f"📝 LLM Response (first 500 chars): {entities_json[:500]}")
+
         # Clean JSON if wrapped in markdown
         if '```json' in entities_json:
             entities_json = entities_json.split('```json')[1].split('```')[0].strip()
         elif '```' in entities_json:
             entities_json = entities_json.split('```')[1].split('```')[0].strip()
 
+        print(f"🧹 Cleaned JSON (first 500 chars): {entities_json[:500]}")
+
         entities = json.loads(entities_json)
 
         print(f"✅ DISCOVERED {len(entities)} entities autonomously from data patterns")
         return entities
 
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON parsing error: {str(e)}")
+        print(f"❌ Raw response: {entities_json[:1000]}")
+        return []
     except Exception as e:
         print(f"❌ Error in autonomous entity discovery: {str(e)}")
+        print(f"❌ Error type: {type(e).__name__}")
+        import traceback
+        print(traceback.format_exc())
         return []
 
 

@@ -6735,16 +6735,68 @@ and <strong>tracks their complete lifecycle</strong> through multiple stages wit
             col_btn, col_info = st.columns([2, 3])
             with col_btn:
                 if st.button("🚀 Generate Entity Journeys", key="generate_entity_journeys_btn", type="primary", use_container_width=True):
-                    with st.spinner("🔄 Phase 1/3: Identifying meaningful entities from dataset..."):
-                        # Generate complete entity journeys using LLM
-                        entity_journeys = generate_complete_llm_journeys(df, model, url)
-                        st.session_state.llm_cache['entity_journeys'] = entity_journeys
+                    # Test connection first
+                    st.info(f"🔍 Testing connection to: {url}")
+                    try:
+                        import requests
+                        test_response = requests.get(f"{url}/api/tags", timeout=10)
+                        if test_response.status_code == 200:
+                            st.success(f"✅ Connection OK - {len(test_response.json()['models'])} models available")
+                        else:
+                            st.error(f"❌ Connection failed: HTTP {test_response.status_code}")
+                            st.stop()
+                    except Exception as conn_err:
+                        st.error(f"❌ Connection test failed: {str(conn_err)}")
+                        st.warning("💡 Make sure your Colab tunnel is running if using Cloudflare")
+                        st.stop()
+
+                    try:
+                        # Capture print logs in a container
+                        log_container = st.container()
+                        import sys
+                        from io import StringIO
+
+                        # Create a custom stdout to capture prints
+                        captured_output = StringIO()
+                        old_stdout = sys.stdout
+                        sys.stdout = captured_output
+
+                        try:
+                            with st.spinner("🔄 Phase 1/3: Identifying meaningful entities from dataset..."):
+                                st.info(f"📊 Analyzing {len(df)} rows with {len(df.columns)} columns...")
+                                # Generate complete entity journeys using LLM
+                                entity_journeys = generate_complete_llm_journeys(df, model, url)
+                                st.session_state.llm_cache['entity_journeys'] = entity_journeys
+                        finally:
+                            # Restore stdout
+                            sys.stdout = old_stdout
+
+                        # Show captured logs in expander
+                        captured_logs = captured_output.getvalue()
+                        if captured_logs:
+                            with st.expander("📋 Show Generation Logs (for debugging)"):
+                                st.text(captured_logs)
 
                         if entity_journeys:
                             total_stages = sum(j['total_stages'] for j in entity_journeys)
                             st.success(f"✅ Generated {len(entity_journeys)} entity journeys with {total_stages} total stages!")
                         else:
-                            st.error("❌ Failed to generate entity journeys. Please check your dataset and Ollama connection.")
+                            st.error("❌ No entity journeys generated (empty result)")
+                            st.warning("💡 The logs above show what happened. Possible causes:")
+                            st.warning("- LLM failed to generate valid JSON (check logs for 'JSON parsing error')")
+                            st.warning("- Dataset too small or lacks clear patterns")
+                            st.warning("- LLM timed out during generation (check logs for 'timeout')")
+                    except Exception as e:
+                        st.error(f"❌ Error generating entity journeys: {str(e)}")
+                        st.error(f"Error type: {type(e).__name__}")
+                        import traceback
+                        with st.expander("🔍 Show detailed error"):
+                            st.code(traceback.format_exc())
+                        st.warning("💡 Troubleshooting:")
+                        st.warning("1. Check Streamlit Cloud logs for full error")
+                        st.warning("2. Verify Colab tunnel is running (if using Cloudflare)")
+                        st.warning("3. Try with a smaller dataset first")
+                        st.warning("4. Check if model exists: " + model)
 
             with col_info:
                 st.info("⏱️ **Estimated time:** 5-15 minutes depending on dataset complexity. The AI will make multiple LLM calls to build comprehensive stories.")

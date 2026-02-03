@@ -13,18 +13,66 @@ PURE DATA-DRIVEN DISCOVERY.
 
 Author: AI Assistant
 Date: 2026-01-18
+Updated: 2026-02-03 - Added support for remote Ollama (Cloudflare)
 """
 
 import pandas as pd
 import json
+import requests
 from typing import Dict, List, Any, Optional
-from ollama import chat
+
+# ============================================================================
+# OLLAMA API HELPER (supports both local and remote)
+# ============================================================================
+
+def call_ollama_api(prompt: str, model: str, ollama_url: str, temperature: float = 0.3, num_predict: int = 2000) -> str:
+    """
+    Call Ollama API via HTTP requests (works with both local and Cloudflare)
+
+    Args:
+        prompt: The prompt text
+        model: Model name
+        ollama_url: Ollama server URL (local or Cloudflare)
+        temperature: Temperature setting
+        num_predict: Max tokens to generate
+
+    Returns:
+        Response text from LLM
+    """
+    try:
+        # Determine timeout based on URL type
+        is_remote = "cloudflare" in ollama_url.lower() or "https://" in ollama_url.lower()
+        timeout = 180 if is_remote else 60  # Longer timeout for Cloudflare
+
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": num_predict
+            }
+        }
+
+        response = requests.post(
+            f"{ollama_url}/api/generate",
+            json=payload,
+            timeout=timeout
+        )
+
+        if response.status_code == 200:
+            return response.json()['response']
+        else:
+            raise Exception(f"HTTP {response.status_code}: {response.text}")
+
+    except Exception as e:
+        raise Exception(f"Ollama API call failed: {str(e)}")
 
 # ============================================================================
 # PHASE 1: AUTONOMOUS ENTITY DISCOVERY (NO GUIDANCE)
 # ============================================================================
 
-def discover_entities_autonomously(df: pd.DataFrame, ollama_model: str = "qwen2.5:7b") -> List[Dict[str, Any]]:
+def discover_entities_autonomously(df: pd.DataFrame, ollama_model: str = "qwen2.5:7b", ollama_url: str = "http://localhost:11434") -> List[Dict[str, Any]]:
     """
     Phase 1: PURE autonomous entity discovery - NO examples, NO guidance.
 
@@ -93,19 +141,13 @@ Analyze the data patterns and discover 6-8 entities that have lifecycles. Base y
 - Be creative - discover what's actually in the data"""
 
     try:
-        response = chat(
+        entities_json = call_ollama_api(
+            prompt=prompt,
             model=ollama_model,
-            messages=[{
-                'role': 'user',
-                'content': prompt
-            }],
-            options={
-                'temperature': 0.7,  # Higher temperature for creative discovery
-                'num_predict': 2500
-            }
-        )
-
-        entities_json = response['message']['content'].strip()
+            ollama_url=ollama_url,
+            temperature=0.7,  # Higher temperature for creative discovery
+            num_predict=2500
+        ).strip()
 
         # Clean JSON if wrapped in markdown
         if '```json' in entities_json:
@@ -130,7 +172,8 @@ Analyze the data patterns and discover 6-8 entities that have lifecycles. Base y
 def discover_stages_autonomously(
     entity: Dict[str, Any],
     df: pd.DataFrame,
-    ollama_model: str = "qwen2.5:7b"
+    ollama_model: str = "qwen2.5:7b",
+    ollama_url: str = "http://localhost:11434"
 ) -> List[Dict[str, Any]]:
     """
     Phase 2: Discover journey stages autonomously based on entity data patterns.
@@ -141,6 +184,7 @@ def discover_stages_autonomously(
         entity: Discovered entity from Phase 1
         df: The student dataset
         ollama_model: The Ollama model to use
+        ollama_url: Ollama server URL (local or Cloudflare)
 
     Returns:
         List of discovered stages
@@ -199,19 +243,13 @@ Analyze the data patterns and discover 4-6 lifecycle stages for this entity. Bas
 - Each stage must be justified by data evidence"""
 
     try:
-        response = chat(
+        stages_json = call_ollama_api(
+            prompt=prompt,
             model=ollama_model,
-            messages=[{
-                'role': 'user',
-                'content': prompt
-            }],
-            options={
-                'temperature': 0.7,
-                'num_predict': 1800
-            }
-        )
-
-        stages_json = response['message']['content'].strip()
+            ollama_url=ollama_url,
+            temperature=0.7,
+            num_predict=1800
+        ).strip()
 
         # Clean JSON
         if '```json' in stages_json:
@@ -260,7 +298,7 @@ def generate_narrative_for_discovered_stage(
 # COMPLETE AUTONOMOUS DISCOVERY PIPELINE
 # ============================================================================
 
-def generate_fully_dynamic_journeys(df: pd.DataFrame, ollama_model: str = "qwen2.5:7b") -> List[Dict[str, Any]]:
+def generate_fully_dynamic_journeys(df: pd.DataFrame, ollama_model: str = "qwen2.5:7b", ollama_url: str = "http://localhost:11434") -> List[Dict[str, Any]]:
     """
     Complete autonomous discovery pipeline with ZERO guidance.
 
@@ -272,6 +310,7 @@ def generate_fully_dynamic_journeys(df: pd.DataFrame, ollama_model: str = "qwen2
     Args:
         df: Student dataset
         ollama_model: Ollama model to use
+        ollama_url: Ollama server URL (local or Cloudflare)
 
     Returns:
         List of complete journeys discovered autonomously
@@ -285,7 +324,7 @@ def generate_fully_dynamic_journeys(df: pd.DataFrame, ollama_model: str = "qwen2
 
     # PHASE 1: Discover entities autonomously
     print("🔍 PHASE 1: Discovering entities from data patterns (NO examples)...")
-    entities = discover_entities_autonomously(df, ollama_model)
+    entities = discover_entities_autonomously(df, ollama_model, ollama_url)
 
     if not entities:
         print("❌ No entities discovered. Aborting.")
@@ -303,7 +342,7 @@ def generate_fully_dynamic_journeys(df: pd.DataFrame, ollama_model: str = "qwen2
 
         # Discover stages autonomously
         print(f"  🔍 PHASE 2: Discovering lifecycle stages from data patterns...")
-        stages = discover_stages_autonomously(entity, df, ollama_model)
+        stages = discover_stages_autonomously(entity, df, ollama_model, ollama_url)
 
         if not stages:
             print(f"  ❌ No stages discovered for {entity['entity_name']}, skipping.")

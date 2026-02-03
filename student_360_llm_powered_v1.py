@@ -6737,7 +6737,7 @@ and <strong>tracks their complete lifecycle</strong> through multiple stages wit
                 if st.button("🚀 Generate Entity Journeys", key="generate_entity_journeys_btn", type="primary", use_container_width=True):
                     with st.spinner("🔄 Phase 1/3: Identifying meaningful entities from dataset..."):
                         # Generate complete entity journeys using LLM
-                        entity_journeys = generate_complete_llm_journeys(df, model)
+                        entity_journeys = generate_complete_llm_journeys(df, model, url)
                         st.session_state.llm_cache['entity_journeys'] = entity_journeys
 
                         if entity_journeys:
@@ -6976,7 +6976,7 @@ The AI analyzes your {metrics.get('total_students', 0):,} students and <strong>d
                 if st.button("🔬 Discover Entities Autonomously", key="discover_dynamic_entities_btn", type="primary", use_container_width=True):
                     with st.spinner("🔄 AI is analyzing data patterns with NO guidance (this may discover unexpected entities)..."):
                         # Generate fully dynamic journeys (NO templates, NO examples)
-                        dynamic_journeys = generate_fully_dynamic_journeys(df, model)
+                        dynamic_journeys = generate_fully_dynamic_journeys(df, model, url)
                         st.session_state.llm_cache['dynamic_journeys'] = dynamic_journeys
 
                         if dynamic_journeys:

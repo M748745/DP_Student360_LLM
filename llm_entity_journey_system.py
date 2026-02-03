@@ -9,24 +9,73 @@ This system uses LLM to:
 
 Author: AI Assistant
 Date: 2026-01-18
+Updated: 2026-02-03 - Added support for remote Ollama (Cloudflare)
 """
 
 import pandas as pd
 import json
+import requests
 from typing import Dict, List, Any, Optional
-from ollama import chat
+
+# ============================================================================
+# OLLAMA API HELPER (supports both local and remote)
+# ============================================================================
+
+def call_ollama_api(prompt: str, model: str, ollama_url: str, temperature: float = 0.3, num_predict: int = 2000) -> str:
+    """
+    Call Ollama API via HTTP requests (works with both local and Cloudflare)
+
+    Args:
+        prompt: The prompt text
+        model: Model name
+        ollama_url: Ollama server URL (local or Cloudflare)
+        temperature: Temperature setting
+        num_predict: Max tokens to generate
+
+    Returns:
+        Response text from LLM
+    """
+    try:
+        # Determine timeout based on URL type
+        is_remote = "cloudflare" in ollama_url.lower() or "https://" in ollama_url.lower()
+        timeout = 180 if is_remote else 60  # Longer timeout for Cloudflare
+
+        payload = {
+            "model": model,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+                "num_predict": num_predict
+            }
+        }
+
+        response = requests.post(
+            f"{ollama_url}/api/generate",
+            json=payload,
+            timeout=timeout
+        )
+
+        if response.status_code == 200:
+            return response.json()['response']
+        else:
+            raise Exception(f"HTTP {response.status_code}: {response.text}")
+
+    except Exception as e:
+        raise Exception(f"Ollama API call failed: {str(e)}")
 
 # ============================================================================
 # PHASE 1: ENTITY IDENTIFICATION
 # ============================================================================
 
-def identify_entities_from_dataset(df: pd.DataFrame, ollama_model: str = "qwen2.5:7b") -> List[Dict[str, Any]]:
+def identify_entities_from_dataset(df: pd.DataFrame, ollama_model: str = "qwen2.5:7b", ollama_url: str = "http://localhost:11434") -> List[Dict[str, Any]]:
     """
     Phase 1: LLM analyzes dataset and identifies meaningful entities for journey analysis.
 
     Args:
         df: The student dataset
         ollama_model: The Ollama model to use
+        ollama_url: Ollama server URL (local or Cloudflare)
 
     Returns:
         List of entity definitions with:
@@ -140,19 +189,13 @@ An entity is a THING that has:
 - data_filter can be empty {{}} if entity covers all students"""
 
     try:
-        response = chat(
+        entities_json = call_ollama_api(
+            prompt=prompt,
             model=ollama_model,
-            messages=[{
-                'role': 'user',
-                'content': prompt
-            }],
-            options={
-                'temperature': 0.3,
-                'num_predict': 2000
-            }
-        )
-
-        entities_json = response['message']['content'].strip()
+            ollama_url=ollama_url,
+            temperature=0.3,
+            num_predict=2000
+        ).strip()
 
         # Clean JSON if wrapped in markdown
         if '```json' in entities_json:
@@ -177,7 +220,8 @@ An entity is a THING that has:
 def define_journey_stages_for_entity(
     entity: Dict[str, Any],
     df: pd.DataFrame,
-    ollama_model: str = "qwen2.5:7b"
+    ollama_model: str = "qwen2.5:7b",
+    ollama_url: str = "http://localhost:11434"
 ) -> List[Dict[str, Any]]:
     """
     Phase 2: LLM defines journey stages for a specific entity.
@@ -186,6 +230,7 @@ def define_journey_stages_for_entity(
         entity: Entity definition from Phase 1
         df: The student dataset
         ollama_model: The Ollama model to use
+        ollama_url: Ollama server URL (local or Cloudflare)
 
     Returns:
         List of journey stages with:
@@ -240,19 +285,13 @@ Define 4-6 journey stages that track this entity's lifecycle through the institu
 - Focus on actionable insights at each stage"""
 
     try:
-        response = chat(
+        stages_json = call_ollama_api(
+            prompt=prompt,
             model=ollama_model,
-            messages=[{
-                'role': 'user',
-                'content': prompt
-            }],
-            options={
-                'temperature': 0.3,
-                'num_predict': 1500
-            }
-        )
-
-        stages_json = response['message']['content'].strip()
+            ollama_url=ollama_url,
+            temperature=0.3,
+            num_predict=1500
+        ).strip()
 
         # Clean JSON if wrapped in markdown
         if '```json' in stages_json:
@@ -278,7 +317,8 @@ def generate_narrative_for_stage(
     entity: Dict[str, Any],
     stage: Dict[str, Any],
     df: pd.DataFrame,
-    ollama_model: str = "qwen2.5:7b"
+    ollama_model: str = "qwen2.5:7b",
+    ollama_url: str = "http://localhost:11434"
 ) -> Dict[str, Any]:
     """
     Phase 3: LLM generates narrative story for a specific stage of an entity's journey.
@@ -288,6 +328,7 @@ def generate_narrative_for_stage(
         stage: Stage definition
         df: The student dataset
         ollama_model: The Ollama model to use
+        ollama_url: Ollama server URL (local or Cloudflare)
 
     Returns:
         Narrative with:
@@ -377,19 +418,13 @@ Generate a compelling narrative that tells the story of what happened to this en
 - Choose visualization types that match the data: pie_chart, bar_chart, line_chart, scatter_plot, stacked_bar, heatmap, histogram"""
 
     try:
-        response = chat(
+        narrative_json = call_ollama_api(
+            prompt=prompt,
             model=ollama_model,
-            messages=[{
-                'role': 'user',
-                'content': prompt
-            }],
-            options={
-                'temperature': 0.4,
-                'num_predict': 1000
-            }
-        )
-
-        narrative_json = response['message']['content'].strip()
+            ollama_url=ollama_url,
+            temperature=0.4,
+            num_predict=1000
+        ).strip()
 
         # Clean JSON if wrapped in markdown
         if '```json' in narrative_json:
@@ -416,7 +451,7 @@ Generate a compelling narrative that tells the story of what happened to this en
 # COMPLETE JOURNEY GENERATION
 # ============================================================================
 
-def generate_complete_llm_journeys(df: pd.DataFrame, ollama_model: str = "qwen2.5:7b") -> List[Dict[str, Any]]:
+def generate_complete_llm_journeys(df: pd.DataFrame, ollama_model: str = "qwen2.5:7b", ollama_url: str = "http://localhost:11434") -> List[Dict[str, Any]]:
     """
     Complete journey generation pipeline:
     1. Identify entities
@@ -426,6 +461,7 @@ def generate_complete_llm_journeys(df: pd.DataFrame, ollama_model: str = "qwen2.
     Args:
         df: Student dataset
         ollama_model: Ollama model to use
+        ollama_url: Ollama server URL (local or Cloudflare)
 
     Returns:
         List of complete journeys with all narratives
@@ -439,7 +475,7 @@ def generate_complete_llm_journeys(df: pd.DataFrame, ollama_model: str = "qwen2.
 
     # PHASE 1: Identify entities
     print("📊 PHASE 1: Identifying entities from dataset...")
-    entities = identify_entities_from_dataset(df, ollama_model)
+    entities = identify_entities_from_dataset(df, ollama_model, ollama_url)
 
     if not entities:
         print("❌ No entities identified. Aborting.")
@@ -455,7 +491,7 @@ def generate_complete_llm_journeys(df: pd.DataFrame, ollama_model: str = "qwen2.
 
         # Define journey stages for this entity
         print(f"  📋 PHASE 2: Defining journey stages...")
-        stages = define_journey_stages_for_entity(entity, df, ollama_model)
+        stages = define_journey_stages_for_entity(entity, df, ollama_model, ollama_url)
 
         if not stages:
             print(f"  ❌ No stages defined for {entity['entity_name']}, skipping.")
@@ -466,7 +502,7 @@ def generate_complete_llm_journeys(df: pd.DataFrame, ollama_model: str = "qwen2.
         stage_narratives = []
 
         for stage in stages:
-            narrative = generate_narrative_for_stage(entity, stage, df, ollama_model)
+            narrative = generate_narrative_for_stage(entity, stage, df, ollama_model, ollama_url)
             stage_narratives.append({
                 **stage,
                 **narrative

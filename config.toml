@@ -1,0 +1,54 @@
+# Streamlit Configuration for Student 360 Analytics Platform
+# Optimized for Streamlit Cloud deployment
+
+[server]
+# Enable CORS for API requests
+enableCORS = true
+
+# Enable XSRF protection
+enableXsrfProtection = true
+
+# Max upload size (200 MB for large datasets)
+maxUploadSize = 200
+
+# Port configuration (default for Streamlit Cloud)
+port = 8501
+
+# Enable WebSocket compression
+enableWebsocketCompression = true
+
+[browser]
+# Gather usage stats (optional - set to false for privacy)
+gatherUsageStats = false
+
+# Server address (auto-configured by Streamlit Cloud)
+serverAddress = "0.0.0.0"
+
+[theme]
+# Student 360 Theme - Dark Mode
+primaryColor = "#6366f1"
+backgroundColor = "#0f172a"
+secondaryBackgroundColor = "#1e293b"
+textColor = "#f1f5f9"
+font = "sans serif"
+
+[client]
+# Show error details
+showErrorDetails = true
+
+# Toolbar mode
+toolbarMode = "minimal"
+
+[runner]
+# Faster script reruns
+fastReruns = true
+
+# Magic commands
+magicEnabled = true
+
+[logger]
+# Log level
+level = "info"
+
+# Message format
+messageFormat = "%(asctime)s - %(levelname)s - %(message)s"

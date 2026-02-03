@@ -1,0 +1,726 @@
+"""
+LLM-Driven Entity Journey System
+=================================
+
+This system uses LLM to:
+1. Identify meaningful entities from the dataset
+2. Define journey stages for each entity
+3. Generate narratives that tell the story of each entity's lifecycle
+
+Author: AI Assistant
+Date: 2026-01-18
+"""
+
+import pandas as pd
+import json
+from typing import Dict, List, Any, Optional
+from ollama import chat
+
+# ============================================================================
+# PHASE 1: ENTITY IDENTIFICATION
+# ============================================================================
+
+def identify_entities_from_dataset(df: pd.DataFrame, ollama_model: str = "qwen2.5:7b") -> List[Dict[str, Any]]:
+    """
+    Phase 1: LLM analyzes dataset and identifies meaningful entities for journey analysis.
+
+    Args:
+        df: The student dataset
+        ollama_model: The Ollama model to use
+
+    Returns:
+        List of entity definitions with:
+        - entity_id: Unique identifier
+        - entity_name: Human-readable name
+        - entity_type: Type (cohort, program, service, revenue_segment, etc.)
+        - description: What this entity represents
+        - data_filter: How to filter the dataset for this entity
+        - priority: 1-10 (higher = more important)
+    """
+
+    # Get dataset summary for LLM
+    dataset_summary = generate_dataset_summary(df)
+
+    prompt = f"""You are analyzing a higher education institution's student dataset to identify meaningful entities for journey analysis.
+
+**Dataset Summary:**
+{dataset_summary}
+
+**Your Task:**
+Identify 6-8 meaningful ENTITIES that have a LIFECYCLE and can exist in different STATUSES. An entity is something that evolves through stages over time.
+
+**WHAT IS AN ENTITY:**
+An entity is a THING that has:
+1. **Lifecycle stages** - It progresses through different phases (beginning → middle → end)
+2. **Status changes** - It can be in different states (active, at-risk, successful, failed)
+3. **Evolution over time** - It changes and develops
+
+**TRUE ENTITY TYPES TO IDENTIFY:**
+
+1. **STUDENT Entity** - Individual students or student status groups
+   - Lifecycle: Enrollment → Academic Progress → Performance Status → Graduation/Dropout
+   - Statuses: Active, At-Risk, High-Performing, On Probation, Graduated
+   - Example: "Student Academic Journey", "Student Retention Journey"
+
+2. **ACADEMIC PROGRAM Entity** - Programs as living entities
+   - Lifecycle: Program Launch → Growth → Maturity → Optimization
+   - Statuses: New, Growing, Established, Declining
+   - Example: "Academic Program Lifecycle", "Program Performance Journey"
+
+3. **FINANCIAL AID Entity** - Aid as a lifecycle process
+   - Lifecycle: Application → Approval → Disbursement → Impact Assessment
+   - Statuses: Pending, Active, Effective, Ineffective
+   - Example: "Financial Aid Lifecycle", "Aid Effectiveness Journey"
+
+4. **ENROLLMENT Entity** - Enrollment as a process
+   - Lifecycle: Application → Acceptance → Registration → Retention
+   - Statuses: Applicant, Accepted, Enrolled, Retained, Dropped
+   - Example: "Enrollment Journey", "Student Acquisition Journey"
+
+5. **CAMPUS/FACILITY Entity** - Physical operations
+   - Lifecycle: Opening → Expansion → Optimization
+   - Statuses: Under-utilized, Optimal, Over-capacity
+   - Example: "Campus Operations Journey", "Dormitory Lifecycle"
+
+6. **REVENUE/PAYMENT Entity** - Financial flows
+   - Lifecycle: Tuition Assessment → Payment → Collection → Revenue Recognition
+   - Statuses: Pending, Paid, Overdue, Defaulted
+   - Example: "Revenue Journey", "Payment Collection Journey"
+
+**CRITICAL RULES:**
+- ❌ DO NOT create simple groupings (e.g., "Engineering Students", "Business Program")
+- ✅ CREATE lifecycle entities (e.g., "Student Academic Journey", "Program Lifecycle")
+- ❌ DO NOT filter by nationality, gender, or demographics
+- ✅ FILTER by lifecycle stage, status, or operational category
+- Think: "What THING has a lifecycle in this institution?"
+
+**Output Format (JSON only, no explanations):**
+[
+  {{
+    "entity_id": "student_academic_journey",
+    "entity_name": "Student Academic Journey",
+    "entity_type": "student_lifecycle",
+    "description": "Tracks student progression from enrollment through academic performance to graduation or dropout",
+    "data_filter": {{}},
+    "student_count": 1000,
+    "priority": 10,
+    "why_important": "Core entity representing student lifecycle and institutional success metrics",
+    "lifecycle_stages": ["Enrollment", "First Semester", "Academic Progress", "Performance Trends", "Retention/Graduation"]
+  }},
+  {{
+    "entity_id": "financial_aid_lifecycle",
+    "entity_name": "Financial Aid Journey",
+    "entity_type": "aid_lifecycle",
+    "description": "Tracks financial aid from allocation through impact on student performance and retention",
+    "data_filter": {{"Total_Aid": "> 0"}},
+    "student_count": 800,
+    "priority": 9,
+    "why_important": "Critical financial entity affecting both student success and institutional revenue",
+    "lifecycle_stages": ["Aid Allocation", "Disbursement", "Performance Impact", "Retention Effect", "ROI Assessment"]
+  }},
+  {{
+    "entity_id": "academic_program_evolution",
+    "entity_name": "Academic Program Lifecycle",
+    "entity_type": "program_lifecycle",
+    "description": "Tracks how academic programs evolve from launch to maturity with enrollment and performance trends",
+    "data_filter": {{}},
+    "student_count": 1000,
+    "priority": 8,
+    "why_important": "Programs are living entities that grow, mature, and require strategic management",
+    "lifecycle_stages": ["Program Portfolio", "Enrollment Trends", "Performance Patterns", "Resource Allocation", "Strategic Position"]
+  }}
+]
+
+**IMPORTANT:**
+- Return ONLY valid JSON array, no markdown
+- Include 6-8 LIFECYCLE entities
+- Think about what has a LIFECYCLE, not what is a GROUP
+- Entities should have STATUS CHANGES (e.g., student goes from enrolled → at-risk → graduated)
+- Include "lifecycle_stages" showing the progression phases
+- data_filter can be empty {{}} if entity covers all students"""
+
+    try:
+        response = chat(
+            model=ollama_model,
+            messages=[{
+                'role': 'user',
+                'content': prompt
+            }],
+            options={
+                'temperature': 0.3,
+                'num_predict': 2000
+            }
+        )
+
+        entities_json = response['message']['content'].strip()
+
+        # Clean JSON if wrapped in markdown
+        if '```json' in entities_json:
+            entities_json = entities_json.split('```json')[1].split('```')[0].strip()
+        elif '```' in entities_json:
+            entities_json = entities_json.split('```')[1].split('```')[0].strip()
+
+        entities = json.loads(entities_json)
+
+        print(f"✅ Identified {len(entities)} entities from dataset")
+        return entities
+
+    except Exception as e:
+        print(f"❌ Error in entity identification: {str(e)}")
+        return []
+
+
+# ============================================================================
+# PHASE 2: JOURNEY STAGE DEFINITION
+# ============================================================================
+
+def define_journey_stages_for_entity(
+    entity: Dict[str, Any],
+    df: pd.DataFrame,
+    ollama_model: str = "qwen2.5:7b"
+) -> List[Dict[str, Any]]:
+    """
+    Phase 2: LLM defines journey stages for a specific entity.
+
+    Args:
+        entity: Entity definition from Phase 1
+        df: The student dataset
+        ollama_model: The Ollama model to use
+
+    Returns:
+        List of journey stages with:
+        - stage_id: Unique identifier
+        - stage_name: Human-readable name
+        - stage_order: 1, 2, 3, etc.
+        - description: What happens in this stage
+        - metrics_to_track: Key metrics for this stage
+    """
+
+    # Filter dataset for this entity
+    entity_data = filter_dataset_for_entity(df, entity)
+    entity_summary = generate_entity_data_summary(entity_data, entity)
+
+    prompt = f"""You are defining the journey stages for a specific entity in a higher education context.
+
+**Entity Information:**
+- Name: {entity['entity_name']}
+- Type: {entity['entity_type']}
+- Description: {entity['description']}
+- Student Count: {entity.get('student_count', 'N/A')}
+
+**Entity Data Summary:**
+{entity_summary}
+
+**Your Task:**
+Define 4-6 journey stages that track this entity's lifecycle through the institution. Each stage should represent a meaningful milestone, transition, or phase.
+
+**Stage Definition Guidelines:**
+- Stages should follow chronological or logical progression
+- Each stage should have measurable metrics
+- Stages should reveal how the entity evolves over time
+- Consider: enrollment → performance → interventions → outcomes
+
+**Output Format (JSON only, no explanations):**
+[
+  {{
+    "stage_id": "enrollment_entry",
+    "stage_name": "Enrollment & Initial Profile",
+    "stage_order": 1,
+    "description": "Students enter the institution - initial demographics, aid allocation, and baseline metrics",
+    "metrics_to_track": ["initial_gpa", "aid_amount", "demographic_breakdown", "enrollment_trends"],
+    "key_questions": ["Who are these students?", "What support did they receive?", "What were their starting conditions?"]
+  }},
+  ...
+]
+
+**IMPORTANT:**
+- Return ONLY valid JSON array, no markdown
+- Include 4-6 stages in logical order
+- Ensure stages are specific to this entity type
+- Focus on actionable insights at each stage"""
+
+    try:
+        response = chat(
+            model=ollama_model,
+            messages=[{
+                'role': 'user',
+                'content': prompt
+            }],
+            options={
+                'temperature': 0.3,
+                'num_predict': 1500
+            }
+        )
+
+        stages_json = response['message']['content'].strip()
+
+        # Clean JSON if wrapped in markdown
+        if '```json' in stages_json:
+            stages_json = stages_json.split('```json')[1].split('```')[0].strip()
+        elif '```' in stages_json:
+            stages_json = stages_json.split('```')[1].split('```')[0].strip()
+
+        stages = json.loads(stages_json)
+
+        print(f"  ✅ Defined {len(stages)} stages for {entity['entity_name']}")
+        return stages
+
+    except Exception as e:
+        print(f"  ❌ Error defining stages for {entity['entity_name']}: {str(e)}")
+        return []
+
+
+# ============================================================================
+# PHASE 3: NARRATIVE GENERATION
+# ============================================================================
+
+def generate_narrative_for_stage(
+    entity: Dict[str, Any],
+    stage: Dict[str, Any],
+    df: pd.DataFrame,
+    ollama_model: str = "qwen2.5:7b"
+) -> Dict[str, Any]:
+    """
+    Phase 3: LLM generates narrative story for a specific stage of an entity's journey.
+
+    Args:
+        entity: Entity definition
+        stage: Stage definition
+        df: The student dataset
+        ollama_model: The Ollama model to use
+
+    Returns:
+        Narrative with:
+        - narrative_text: The story of what happened in this stage
+        - key_metrics: Important metrics highlighted
+        - insights: Strategic insights discovered
+        - recommendations: Actions to take based on this stage
+    """
+
+    # Filter and calculate metrics for this entity
+    entity_data = filter_dataset_for_entity(df, entity)
+    stage_metrics = calculate_stage_metrics(entity_data, stage)
+
+    prompt = f"""You are telling the story of what happened to a specific entity in a specific stage of their journey through a higher education institution.
+
+**Entity:** {entity['entity_name']}
+**Stage:** {stage['stage_name']} (Stage {stage['stage_order']})
+**Stage Description:** {stage['description']}
+
+**Metrics for This Stage:**
+{json.dumps(stage_metrics, indent=2)}
+
+**Your Task:**
+Generate a compelling narrative that tells the story of what happened to this entity during this stage. Use the data to support your narrative.
+
+**Narrative Guidelines:**
+- Write 3-4 paragraphs (200-300 words total)
+- Start with the context and what the data shows
+- **INCLUDE nationality breakdown** when analyzing student cohorts (e.g., "The cohort includes 45 Iraqi students, 30 Jordanian students...")
+- Highlight key patterns, trends, and anomalies
+- Explain WHY these patterns matter
+- Connect to institutional goals and student outcomes
+- Use specific numbers and metrics from the data
+- Write in professional, engaging style
+
+**Output Format (JSON only):**
+{{
+  "narrative_text": "The Engineering student cohort comprises 120 students across diverse nationalities, with Iraqi students representing the largest group (45 students, 37.5%), followed by Jordanian (30 students, 25%) and Palestinian students (25 students, 21%). Initial assessments reveal an average GPA of 3.2, with notable variations across nationality groups. Financial aid distribution shows 80% of students receiving support, totaling AED 4.8M in institutional investment...",
+  "key_metrics": [
+    {{"metric": "Total Students", "value": "120", "significance": "Largest academic program"}},
+    {{"metric": "Average GPA", "value": "3.2", "significance": "Slightly below institutional average of 3.4"}},
+    {{"metric": "Aid Recipients", "value": "96 out of 120 (80%)", "significance": "High aid dependency"}},
+    {{"metric": "Nationality Diversity", "value": "15 countries", "significance": "Diverse international composition"}}
+  ],
+  "insights": [
+    "Iraqi students form the largest cohort within Engineering, requiring culturally-aware support services",
+    "Performance patterns suggest need for targeted academic interventions across nationality groups",
+    "High aid dependency indicates strategic importance for institutional revenue planning"
+  ],
+  "recommendations": [
+    "Establish peer mentoring program pairing students across nationalities",
+    "Monitor aid effectiveness by nationality group to identify optimization opportunities",
+    "Create culturally-inclusive academic support programs"
+  ],
+  "visualizations": [
+    {{
+      "viz_type": "pie_chart",
+      "title": "Student Distribution by Nationality",
+      "description": "Shows the proportion of students from each country",
+      "data_fields": ["Nationality"],
+      "chart_purpose": "Visualize diversity and identify dominant nationality groups"
+    }},
+    {{
+      "viz_type": "bar_chart",
+      "title": "Average GPA by Nationality",
+      "description": "Compares academic performance across nationality groups",
+      "data_fields": ["Nationality", "GPA"],
+      "chart_purpose": "Identify performance variations requiring targeted interventions"
+    }},
+    {{
+      "viz_type": "stacked_bar",
+      "title": "Aid Distribution by Nationality",
+      "description": "Shows total aid amount and recipient count per nationality",
+      "data_fields": ["Nationality", "Total_Aid"],
+      "chart_purpose": "Understand financial aid allocation patterns and dependencies"
+    }}
+  ]
+}}
+
+**IMPORTANT:**
+- Return ONLY valid JSON, no markdown
+- Use actual metrics from the data provided
+- **ALWAYS include nationality breakdown** in the narrative for student cohorts
+- Make narrative specific and data-driven
+- Focus on actionable insights
+- **INCLUDE 2-4 visualizations** that best tell the story of this stage
+- Choose visualization types that match the data: pie_chart, bar_chart, line_chart, scatter_plot, stacked_bar, heatmap, histogram"""
+
+    try:
+        response = chat(
+            model=ollama_model,
+            messages=[{
+                'role': 'user',
+                'content': prompt
+            }],
+            options={
+                'temperature': 0.4,
+                'num_predict': 1000
+            }
+        )
+
+        narrative_json = response['message']['content'].strip()
+
+        # Clean JSON if wrapped in markdown
+        if '```json' in narrative_json:
+            narrative_json = narrative_json.split('```json')[1].split('```')[0].strip()
+        elif '```' in narrative_json:
+            narrative_json = narrative_json.split('```')[1].split('```')[0].strip()
+
+        narrative = json.loads(narrative_json)
+
+        print(f"    ✅ Generated narrative for {entity['entity_name']} - {stage['stage_name']}")
+        return narrative
+
+    except Exception as e:
+        print(f"    ❌ Error generating narrative: {str(e)}")
+        return {
+            "narrative_text": "Error generating narrative.",
+            "key_metrics": [],
+            "insights": [],
+            "recommendations": []
+        }
+
+
+# ============================================================================
+# COMPLETE JOURNEY GENERATION
+# ============================================================================
+
+def generate_complete_llm_journeys(df: pd.DataFrame, ollama_model: str = "qwen2.5:7b") -> List[Dict[str, Any]]:
+    """
+    Complete journey generation pipeline:
+    1. Identify entities
+    2. Define stages for each entity
+    3. Generate narratives for each stage
+
+    Args:
+        df: Student dataset
+        ollama_model: Ollama model to use
+
+    Returns:
+        List of complete journeys with all narratives
+    """
+
+    print("\n" + "="*80)
+    print("🚀 STARTING LLM-DRIVEN ENTITY JOURNEY GENERATION")
+    print("="*80 + "\n")
+
+    all_journeys = []
+
+    # PHASE 1: Identify entities
+    print("📊 PHASE 1: Identifying entities from dataset...")
+    entities = identify_entities_from_dataset(df, ollama_model)
+
+    if not entities:
+        print("❌ No entities identified. Aborting.")
+        return []
+
+    print(f"\n✅ Found {len(entities)} entities\n")
+
+    # PHASE 2 & 3: For each entity, define stages and generate narratives
+    for idx, entity in enumerate(entities, 1):
+        print(f"\n{'='*80}")
+        print(f"🎯 Processing Entity {idx}/{len(entities)}: {entity['entity_name']}")
+        print(f"{'='*80}\n")
+
+        # Define journey stages for this entity
+        print(f"  📋 PHASE 2: Defining journey stages...")
+        stages = define_journey_stages_for_entity(entity, df, ollama_model)
+
+        if not stages:
+            print(f"  ❌ No stages defined for {entity['entity_name']}, skipping.")
+            continue
+
+        # Generate narratives for each stage
+        print(f"\n  ✍️  PHASE 3: Generating narratives for {len(stages)} stages...")
+        stage_narratives = []
+
+        for stage in stages:
+            narrative = generate_narrative_for_stage(entity, stage, df, ollama_model)
+            stage_narratives.append({
+                **stage,
+                **narrative
+            })
+
+        # Compile complete journey
+        complete_journey = {
+            **entity,
+            'stages': stage_narratives,
+            'total_stages': len(stage_narratives)
+        }
+
+        all_journeys.append(complete_journey)
+
+        print(f"\n  ✅ Completed journey for {entity['entity_name']} with {len(stage_narratives)} stages")
+
+    print("\n" + "="*80)
+    print(f"✅ JOURNEY GENERATION COMPLETE - {len(all_journeys)} journeys created")
+    print("="*80 + "\n")
+
+    return all_journeys
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def generate_dataset_summary(df: pd.DataFrame) -> str:
+    """Generate a concise summary of the dataset for LLM analysis."""
+
+    # Build summary with proper conditionals
+    nationality_info = f"{df['Nationality'].nunique()} unique" if 'Nationality' in df.columns else 'N/A'
+    nationality_top = ', '.join(df['Nationality'].value_counts().head(5).index.tolist()) if 'Nationality' in df.columns else 'N/A'
+
+    major_info = f"{df['Major'].nunique()} unique" if 'Major' in df.columns else 'N/A'
+    major_top = ', '.join(df['Major'].value_counts().head(5).index.tolist()) if 'Major' in df.columns else 'N/A'
+
+    gpa_range = f"{df['GPA'].min():.2f} - {df['GPA'].max():.2f}" if 'GPA' in df.columns else 'N/A'
+
+    aid_count = len(df[df['Total_Aid'] > 0]) if 'Total_Aid' in df.columns else 0
+    aid_pct = (aid_count / len(df) * 100) if 'Total_Aid' in df.columns and len(df) > 0 else 0
+    aid_info = f"{aid_count} students ({aid_pct:.1f}%)" if 'Total_Aid' in df.columns else 'N/A'
+
+    dorm_count = len(df[df['Room_Number'].notna()]) if 'Room_Number' in df.columns else 0
+    dorm_info = f"{dorm_count} students" if 'Room_Number' in df.columns else 'N/A'
+
+    summary = f"""
+Total Students: {len(df)}
+Columns Available: {', '.join(df.columns.tolist())}
+
+Key Distributions:
+- Nationalities: {nationality_info} ({nationality_top})
+- Programs/Majors: {major_info} ({major_top})
+- GPA Range: {gpa_range}
+- Aid Recipients: {aid_info}
+- Dormitory Residents: {dorm_info}
+"""
+    return summary.strip()
+
+
+def generate_entity_data_summary(entity_df: pd.DataFrame, entity: Dict[str, Any]) -> str:
+    """Generate summary of data for a specific entity."""
+
+    if len(entity_df) == 0:
+        return "No data available for this entity."
+
+    gpa_info = f"Average {entity_df['GPA'].mean():.2f}, Range {entity_df['GPA'].min():.2f}-{entity_df['GPA'].max():.2f}" if 'GPA' in entity_df.columns else 'N/A'
+
+    aid_recipients = len(entity_df[entity_df['Total_Aid'] > 0]) if 'Total_Aid' in entity_df.columns else 0
+    aid_total = entity_df['Total_Aid'].sum() if 'Total_Aid' in entity_df.columns else 0
+    aid_info = f"{aid_recipients} recipients, Total AED {aid_total:,.0f}" if 'Total_Aid' in entity_df.columns else 'N/A'
+
+    summary = f"""
+Student Count: {len(entity_df)}
+GPA: {gpa_info}
+Aid: {aid_info}
+"""
+    return summary.strip()
+
+
+def filter_dataset_for_entity(df: pd.DataFrame, entity: Dict[str, Any]) -> pd.DataFrame:
+    """Filter dataset based on entity's data_filter criteria."""
+
+    data_filter = entity.get('data_filter', {})
+    filtered_df = df.copy()
+
+    for column, value in data_filter.items():
+        if column in filtered_df.columns:
+            # Handle special filter notations
+            if value == "!= null":
+                # Non-null filtering
+                filtered_df = filtered_df[filtered_df[column].notna()]
+            elif isinstance(value, str) and value.startswith("> "):
+                # Greater than filtering (e.g., "> 0")
+                try:
+                    threshold = float(value.split("> ")[1])
+                    # Convert column to numeric, coerce errors to NaN
+                    numeric_col = pd.to_numeric(filtered_df[column], errors='coerce')
+                    filtered_df = filtered_df[numeric_col > threshold]
+                except (ValueError, TypeError) as e:
+                    print(f"  ⚠️ Warning: Could not apply numeric filter '> {threshold}' to column '{column}': {e}")
+            elif isinstance(value, str) and value.startswith("< "):
+                # Less than filtering
+                try:
+                    threshold = float(value.split("< ")[1])
+                    numeric_col = pd.to_numeric(filtered_df[column], errors='coerce')
+                    filtered_df = filtered_df[numeric_col < threshold]
+                except (ValueError, TypeError) as e:
+                    print(f"  ⚠️ Warning: Could not apply numeric filter '< {threshold}' to column '{column}': {e}")
+            elif isinstance(value, str) and value.startswith(">= "):
+                # Greater than or equal filtering
+                try:
+                    threshold = float(value.split(">= ")[1])
+                    numeric_col = pd.to_numeric(filtered_df[column], errors='coerce')
+                    filtered_df = filtered_df[numeric_col >= threshold]
+                except (ValueError, TypeError) as e:
+                    print(f"  ⚠️ Warning: Could not apply numeric filter '>= {threshold}' to column '{column}': {e}")
+            elif isinstance(value, str) and value.startswith("<= "):
+                # Less than or equal filtering
+                try:
+                    threshold = float(value.split("<= ")[1])
+                    numeric_col = pd.to_numeric(filtered_df[column], errors='coerce')
+                    filtered_df = filtered_df[numeric_col <= threshold]
+                except (ValueError, TypeError) as e:
+                    print(f"  ⚠️ Warning: Could not apply numeric filter '<= {threshold}' to column '{column}': {e}")
+            elif isinstance(value, list):
+                # List of values (IN filter)
+                filtered_df = filtered_df[filtered_df[column].isin(value)]
+            else:
+                # Exact match filtering
+                filtered_df = filtered_df[filtered_df[column] == value]
+
+    return filtered_df
+
+
+def calculate_stage_metrics(entity_df: pd.DataFrame, stage: Dict[str, Any]) -> Dict[str, Any]:
+    """Calculate metrics relevant to a specific stage."""
+
+    metrics = {
+        'student_count': len(entity_df),
+        'avg_gpa': float(entity_df['GPA'].mean()) if 'GPA' in entity_df.columns else 0,
+        'gpa_range': f"{entity_df['GPA'].min():.2f} - {entity_df['GPA'].max():.2f}" if 'GPA' in entity_df.columns else 'N/A',
+        'total_aid': float(entity_df['Total_Aid'].sum()) if 'Total_Aid' in entity_df.columns else 0,
+        'aid_recipients': int(len(entity_df[entity_df['Total_Aid'] > 0])) if 'Total_Aid' in entity_df.columns else 0,
+    }
+
+    # Add nationality breakdown if available
+    if 'Nationality' in entity_df.columns:
+        nationality_counts = entity_df['Nationality'].value_counts().head(10).to_dict()
+        metrics['nationality_breakdown'] = {
+            nat: {'count': int(count), 'percentage': round(count / len(entity_df) * 100, 1)}
+            for nat, count in nationality_counts.items()
+        }
+        metrics['total_nationalities'] = int(entity_df['Nationality'].nunique())
+
+    # Add major/program breakdown if available and not already filtered by it
+    if 'Major' in entity_df.columns and entity_df['Major'].nunique() > 1:
+        major_counts = entity_df['Major'].value_counts().head(5).to_dict()
+        metrics['major_breakdown'] = {
+            major: {'count': int(count), 'percentage': round(count / len(entity_df) * 100, 1)}
+            for major, count in major_counts.items()
+        }
+
+    # Add stage-specific metrics based on metrics_to_track
+    # This can be expanded based on the stage requirements
+
+    return metrics
+
+
+def generate_visualization(entity_df: pd.DataFrame, viz_spec: Dict[str, Any]):
+    """
+    Generate a Plotly visualization based on LLM-provided specification.
+
+    Args:
+        entity_df: The filtered dataset for this entity
+        viz_spec: Visualization specification from LLM containing:
+            - viz_type: Type of chart (pie_chart, bar_chart, etc.)
+            - title: Chart title
+            - description: Chart description
+            - data_fields: List of fields to visualize
+            - chart_purpose: Why this chart matters
+
+    Returns:
+        Plotly figure object
+    """
+    import plotly.express as px
+    import plotly.graph_objects as go
+
+    viz_type = viz_spec.get('viz_type', 'bar_chart')
+    title = viz_spec.get('title', 'Visualization')
+    data_fields = viz_spec.get('data_fields', [])
+
+    try:
+        if viz_type == 'pie_chart' and len(data_fields) >= 1:
+            # Pie chart for distribution
+            field = data_fields[0]
+            if field in entity_df.columns:
+                counts = entity_df[field].value_counts().head(10)
+                fig = px.pie(values=counts.values, names=counts.index, title=title)
+                return fig
+
+        elif viz_type == 'bar_chart' and len(data_fields) >= 2:
+            # Bar chart for comparisons
+            category_field = data_fields[0]
+            value_field = data_fields[1]
+            if category_field in entity_df.columns and value_field in entity_df.columns:
+                grouped = entity_df.groupby(category_field)[value_field].mean().sort_values(ascending=False).head(10)
+                fig = px.bar(x=grouped.index, y=grouped.values, title=title,
+                           labels={'x': category_field, 'y': f'Average {value_field}'})
+                return fig
+
+        elif viz_type == 'stacked_bar' and len(data_fields) >= 2:
+            # Stacked bar for multi-dimensional data
+            category_field = data_fields[0]
+            value_field = data_fields[1]
+            if category_field in entity_df.columns and value_field in entity_df.columns:
+                grouped = entity_df.groupby(category_field).agg({
+                    value_field: ['sum', 'count']
+                }).head(10)
+                fig = go.Figure()
+                fig.add_trace(go.Bar(name='Total', x=grouped.index, y=grouped[(value_field, 'sum')]))
+                fig.update_layout(title=title, barmode='stack')
+                return fig
+
+        elif viz_type == 'histogram' and len(data_fields) >= 1:
+            # Histogram for distribution
+            field = data_fields[0]
+            if field in entity_df.columns:
+                fig = px.histogram(entity_df, x=field, title=title, nbins=20)
+                return fig
+
+        elif viz_type == 'scatter_plot' and len(data_fields) >= 2:
+            # Scatter plot for correlation
+            x_field = data_fields[0]
+            y_field = data_fields[1]
+            if x_field in entity_df.columns and y_field in entity_df.columns:
+                fig = px.scatter(entity_df, x=x_field, y=y_field, title=title)
+                return fig
+
+        elif viz_type == 'line_chart' and len(data_fields) >= 2:
+            # Line chart for trends
+            x_field = data_fields[0]
+            y_field = data_fields[1]
+            if x_field in entity_df.columns and y_field in entity_df.columns:
+                fig = px.line(entity_df, x=x_field, y=y_field, title=title)
+                return fig
+
+        # Default: simple bar chart of first field
+        if len(data_fields) > 0 and data_fields[0] in entity_df.columns:
+            counts = entity_df[data_fields[0]].value_counts().head(10)
+            fig = px.bar(x=counts.index, y=counts.values, title=title)
+            return fig
+
+    except Exception as e:
+        print(f"    ⚠️ Could not generate {viz_type}: {str(e)}")
+
+    return None

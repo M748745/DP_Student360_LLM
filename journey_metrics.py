@@ -26,6 +26,28 @@ def safe_divide(numerator: float, denominator: float) -> float:
     """Divide safely, avoiding division by zero"""
     return (numerator / denominator) if denominator > 0 else 0.0
 
+def safe_column_mean(df: pd.DataFrame, column: str, default=0.0) -> float:
+    """Safely get column mean, returning default if column doesn't exist"""
+    if column in df.columns:
+        try:
+            return round(df[column].mean(), 1) if not df[column].empty else default
+        except:
+            return default
+    return default
+
+def safe_column_sum(df: pd.DataFrame, column: str, default=0) -> float:
+    """Safely get column sum, returning default if column doesn't exist"""
+    if column in df.columns:
+        try:
+            return round(df[column].sum(), 0)
+        except:
+            return default
+    return default
+
+def safe_column_exists(df: pd.DataFrame, column: str) -> bool:
+    """Check if column exists in dataframe"""
+    return column in df.columns
+
 def get_top_n_items(series: pd.Series, n: int = 5) -> List[Tuple[str, int, float]]:
     """
     Get top N items from a series with counts and percentages
@@ -166,8 +188,8 @@ def calculate_story_1_3_metrics(df: pd.DataFrame) -> Dict[str, Any]:
         }
 
     # Credits analysis
-    metrics['avg_credits_attempted'] = round(df['credits_attempted'].mean(), 1)
-    metrics['avg_degree_progress'] = round(df['degree_progress_pct'].mean(), 1)
+    metrics['avg_credits_attempted'] = safe_column_mean(df, 'credits_attempted', 0.0)
+    metrics['avg_degree_progress'] = safe_column_mean(df, 'degree_progress_pct', 0.0)
 
     return metrics
 
@@ -296,6 +318,15 @@ def calculate_story_2_3_metrics(df: pd.DataFrame) -> Dict[str, Any]:
     Metrics: total balance due, collection rate, payment patterns
     """
     metrics = {}
+
+    # Check if required column exists
+    if 'balance_due' not in df.columns:
+        metrics['total_balance_due'] = 0
+        metrics['total_balance_millions'] = 0
+        metrics['students_with_balance_count'] = 0
+        metrics['students_with_balance_pct'] = 0
+        metrics['note'] = 'balance_due column not available in dataset'
+        return metrics
 
     # Total outstanding balance
     metrics['total_balance_due'] = df['balance_due'].sum()
@@ -1205,8 +1236,14 @@ def calculate_all_journey_metrics(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]
         except ZeroDivisionError as e:
             print(f"⚠️ Warning: Division by zero in {story_id}. Using empty metrics.")
             return {'error': f'Division by zero: {str(e)}'}
+        except KeyError as e:
+            # Column doesn't exist - this is expected for datasets with different schemas
+            # Return empty metrics without printing warning (less noise)
+            return {'error': f'Missing column: {str(e)}', 'note': 'Column not in dataset'}
         except Exception as e:
-            print(f"⚠️ Warning: Error calculating {story_id}: {str(e)}")
+            # Only print warning for unexpected errors, not missing columns
+            if 'KeyError' not in str(type(e).__name__):
+                print(f"⚠️ Warning: Error calculating {story_id}: {str(e)}")
             return {'error': str(e)}
 
     # Journey 1: Enrollment & Student Composition

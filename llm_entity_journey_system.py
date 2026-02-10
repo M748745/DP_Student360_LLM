@@ -15,7 +15,86 @@ Updated: 2026-02-03 - Added support for remote Ollama (Cloudflare)
 import pandas as pd
 import json
 import requests
+import re
 from typing import Dict, List, Any, Optional
+
+# ============================================================================
+# DYNAMIC MODEL DETECTION (no hardcoding required)
+# ============================================================================
+
+def detect_model_tier(model_name: str) -> Dict[str, Any]:
+    """
+    Dynamically detect model capabilities from model name.
+    Works with ANY model without hardcoding.
+
+    Args:
+        model_name: Any model name (e.g., "qwen2.5:3b", "llama3.3:70b", "custom-model")
+
+    Returns:
+        Dict with adaptive configuration
+    """
+    model_lower = model_name.lower()
+
+    # Extract parameter size using regex (matches patterns like "3b", "7b", "70b")
+    size_match = re.search(r'(\d+)b', model_lower)
+    param_size = int(size_match.group(1)) if size_match else None
+
+    # Determine tier based on parameter size
+    if param_size:
+        if param_size <= 4:
+            tier = "small"
+        elif param_size <= 13:
+            tier = "medium"
+        else:
+            tier = "large"
+    else:
+        # Fallback: infer from common model families
+        if "3b" in model_lower or "1b" in model_lower or "0.5b" in model_lower:
+            tier = "small"
+        elif "70b" in model_lower or "65b" in model_lower or "72b" in model_lower:
+            tier = "large"
+        else:
+            # Default to medium for unknown models
+            tier = "medium"
+            param_size = 7  # Assume ~7B
+
+    # Return adaptive configuration based on tier
+    if tier == "small":
+        return {
+            "tier": "small",
+            "param_size": param_size or 3,
+            "base_timeout_local": 120,
+            "base_timeout_remote": 180,
+            "entity_token_limits": [2500, 3000, 3500],
+            "stage_token_limits": [1200, 1500, 1800],
+            "narrative_token_limits": [1500, 2000, 2500],
+            "max_entities": 4,
+            "temperature": 0.4
+        }
+    elif tier == "large":
+        return {
+            "tier": "large",
+            "param_size": param_size or 70,
+            "base_timeout_local": 360,
+            "base_timeout_remote": 480,
+            "entity_token_limits": [5000, 6000, 8000],
+            "stage_token_limits": [3000, 4000, 5000],
+            "narrative_token_limits": [3500, 4500, 6000],
+            "max_entities": 8,
+            "temperature": 0.2
+        }
+    else:  # medium (default)
+        return {
+            "tier": "medium",
+            "param_size": param_size or 7,
+            "base_timeout_local": 240,
+            "base_timeout_remote": 300,
+            "entity_token_limits": [4000, 5000, 6000],
+            "stage_token_limits": [2000, 2500, 3000],
+            "narrative_token_limits": [2500, 3000, 3500],
+            "max_entities": 6,
+            "temperature": 0.3
+        }
 
 # ============================================================================
 # OLLAMA API HELPER (supports both local and remote)
@@ -36,9 +115,12 @@ def call_ollama_api(prompt: str, model: str, ollama_url: str, temperature: float
         Response text from LLM
     """
     try:
-        # Determine timeout based on URL type
+        # Dynamically detect model capabilities and adjust timeout
+        model_config = detect_model_tier(model)
         is_remote = "cloudflare" in ollama_url.lower() or "https://" in ollama_url.lower()
-        timeout = 300 if is_remote else 60  # 5 minutes for Cloudflare (increased for Streamlit Cloud)
+
+        # Use adaptive timeout based on model size and server location
+        timeout = model_config["base_timeout_remote"] if is_remote else model_config["base_timeout_local"]
 
         payload = {
             "model": model,
@@ -63,6 +145,83 @@ def call_ollama_api(prompt: str, model: str, ollama_url: str, temperature: float
 
     except Exception as e:
         raise Exception(f"Ollama API call failed: {str(e)}")
+
+# ============================================================================
+# JSON SANITIZATION HELPER
+# ============================================================================
+
+def sanitize_json_string(json_str: str) -> str:
+    """
+    Sanitize JSON string by removing/escaping control characters.
+
+    Args:
+        json_str: Raw JSON string from LLM
+
+    Returns:
+        Sanitized JSON string safe for parsing
+    """
+    # Remove control characters (0x00-0x1F) except newlines, tabs, carriage returns
+    # which should be escaped in JSON
+    control_chars = ''.join(chr(i) for i in range(0, 32) if i not in [9, 10, 13])
+    for char in control_chars:
+        json_str = json_str.replace(char, '')
+
+    # Replace unescaped newlines in string values (but not in structure)
+    # This is tricky - we need to escape newlines that are inside string values
+    # A simple approach: replace \n with \\n if not already escaped
+    json_str = re.sub(r'(?<!\\)\n', r'\\n', json_str)
+    json_str = re.sub(r'(?<!\\)\r', r'\\r', json_str)
+    json_str = re.sub(r'(?<!\\)\t', r'\\t', json_str)
+
+    return json_str
+
+def parse_json_with_fallback(json_str: str):
+    """
+    Parse JSON with multiple fallback strategies.
+
+    Args:
+        json_str: JSON string to parse
+
+    Returns:
+        Parsed dictionary/list or appropriate empty structure on failure
+    """
+    # Strategy 1: Direct parse with strict=False
+    try:
+        return json.loads(json_str, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 2: Sanitize and parse
+    try:
+        sanitized = sanitize_json_string(json_str)
+        return json.loads(sanitized, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 3: Try to fix common issues
+    try:
+        # Remove trailing commas before closing brackets/braces
+        fixed = re.sub(r',(\s*[}\]])', r'\1', json_str)
+        # Fix single quotes to double quotes (risky but sometimes helps)
+        # fixed = fixed.replace("'", '"')
+        return json.loads(fixed, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # Strategy 4: Sanitize + fix
+    try:
+        sanitized = sanitize_json_string(json_str)
+        fixed = re.sub(r',(\s*[}\]])', r'\1', sanitized)
+        return json.loads(fixed, strict=False)
+    except json.JSONDecodeError:
+        pass
+
+    # All strategies failed - return appropriate empty structure based on first character
+    json_str_stripped = json_str.strip()
+    if json_str_stripped.startswith('['):
+        return []  # Expecting an array
+    else:
+        return {}  # Expecting an object
 
 # ============================================================================
 # PHASE 1: ENTITY IDENTIFICATION
@@ -90,13 +249,23 @@ def identify_entities_from_dataset(df: pd.DataFrame, ollama_model: str = "qwen2.
     # Get dataset summary for LLM
     dataset_summary = generate_dataset_summary(df)
 
+    # Dynamically adapt to model capabilities
+    model_config = detect_model_tier(ollama_model)
+    max_entities = model_config["max_entities"]
+
+    print(f"🤖 Model: {ollama_model} ({model_config['tier']} tier, ~{model_config['param_size']}B parameters)")
+    print(f"🎯 Target entities: {max_entities}")
+    print(f"⏱️  Timeout: {model_config['base_timeout_local']}s (local) / {model_config['base_timeout_remote']}s (remote)")
+
     prompt = f"""You are analyzing a higher education institution's student dataset to identify meaningful entities for journey analysis.
 
 **Dataset Summary:**
 {dataset_summary}
 
 **Your Task:**
-Identify 6-8 meaningful ENTITIES that have a LIFECYCLE and can exist in different STATUSES. An entity is something that evolves through stages over time.
+Identify EXACTLY {max_entities} meaningful ENTITIES that have a LIFECYCLE and can exist in different STATUSES. An entity is something that evolves through stages over time.
+
+**IMPORTANT: Generate exactly {max_entities} entities - no more, no less.**
 
 **WHAT IS AN ENTITY:**
 An entity is a THING that has:
@@ -182,47 +351,98 @@ An entity is a THING that has:
 
 **IMPORTANT:**
 - Return ONLY valid JSON array, no markdown
-- Include 6-8 LIFECYCLE entities
+- Include EXACTLY {max_entities} LIFECYCLE entities
 - Think about what has a LIFECYCLE, not what is a GROUP
 - Entities should have STATUS CHANGES (e.g., student goes from enrolled → at-risk → graduated)
 - Include "lifecycle_stages" showing the progression phases
 - data_filter can be empty {{}} if entity covers all students"""
 
-    try:
-        print(f"🔄 Calling LLM for entity identification...")
-        entities_json = call_ollama_api(
-            prompt=prompt,
-            model=ollama_model,
-            ollama_url=ollama_url,
-            temperature=0.3,
-            num_predict=2000
-        ).strip()
+    # Try up to 3 times with increasing token limits (adaptive based on model)
+    max_retries = 3
+    token_limits = model_config["entity_token_limits"]
 
-        print(f"📝 LLM Response (first 500 chars): {entities_json[:500]}")
+    for attempt in range(max_retries):
+        try:
+            current_token_limit = token_limits[attempt]
+            print(f"🔄 Attempt {attempt + 1}/{max_retries}: Calling LLM for entity identification (tokens: {current_token_limit})...")
 
-        # Clean JSON if wrapped in markdown
-        if '```json' in entities_json:
-            entities_json = entities_json.split('```json')[1].split('```')[0].strip()
-        elif '```' in entities_json:
-            entities_json = entities_json.split('```')[1].split('```')[0].strip()
+            entities_json = call_ollama_api(
+                prompt=prompt,
+                model=ollama_model,
+                ollama_url=ollama_url,
+                temperature=model_config["temperature"],  # Adaptive temperature
+                num_predict=current_token_limit
+            ).strip()
 
-        print(f"🧹 Cleaned JSON (first 500 chars): {entities_json[:500]}")
+            print(f"📝 LLM Response length: {len(entities_json)} chars")
+            print(f"📝 LLM Response (first 500 chars): {entities_json[:500]}")
+            print(f"📝 LLM Response (last 200 chars): {entities_json[-200:]}")
 
-        entities = json.loads(entities_json)
+            # Clean JSON if wrapped in markdown
+            if '```json' in entities_json:
+                entities_json = entities_json.split('```json')[1].split('```')[0].strip()
+            elif '```' in entities_json:
+                entities_json = entities_json.split('```')[1].split('```')[0].strip()
 
-        print(f"✅ Identified {len(entities)} entities from dataset")
-        return entities
+            # Remove any text before the first '[' and after the last ']'
+            if '[' in entities_json and ']' in entities_json:
+                start_idx = entities_json.find('[')
+                end_idx = entities_json.rfind(']') + 1
+                entities_json = entities_json[start_idx:end_idx]
 
-    except json.JSONDecodeError as e:
-        print(f"❌ JSON parsing error: {str(e)}")
-        print(f"❌ Raw response: {entities_json[:1000]}")
-        return []
-    except Exception as e:
-        print(f"❌ Error in entity identification: {str(e)}")
-        print(f"❌ Error type: {type(e).__name__}")
-        import traceback
-        print(traceback.format_exc())
-        return []
+            print(f"🧹 Cleaned JSON length: {len(entities_json)} chars")
+            print(f"🧹 Cleaned JSON (first 500 chars): {entities_json[:500]}")
+
+            # Use robust JSON parsing
+            entities = parse_json_with_fallback(entities_json)
+
+            if not entities or len(entities) == 0 or not isinstance(entities, list):
+                print(f"⚠️ Attempt {attempt + 1}: LLM returned empty entity list, retrying...")
+                continue
+
+            # Check if we got the target number of entities
+            if len(entities) != max_entities:
+                print(f"⚠️ Attempt {attempt + 1}: LLM returned {len(entities)} entities instead of {max_entities}, retrying...")
+                if attempt < max_retries - 1:
+                    continue
+                else:
+                    # On last attempt, accept what we got if it's at least half the target
+                    min_acceptable = max(2, max_entities // 2)
+                    if len(entities) >= min_acceptable:
+                        print(f"✅ Accepted {len(entities)} entities (target was {max_entities})")
+                        return entities
+                    else:
+                        continue
+
+            print(f"✅ Identified {len(entities)} entities from dataset")
+            return entities
+
+        except json.JSONDecodeError as e:
+            print(f"❌ Attempt {attempt + 1}: JSON parsing error: {str(e)}")
+            print(f"❌ Raw response length: {len(entities_json) if 'entities_json' in locals() else 0}")
+            if 'entities_json' in locals():
+                print(f"❌ Raw response (first 1000 chars): {entities_json[:1000]}")
+                print(f"❌ Raw response (last 500 chars): {entities_json[-500:]}")
+
+            if attempt < max_retries - 1:
+                print(f"🔄 Retrying with more tokens...")
+            else:
+                print(f"❌ All {max_retries} attempts failed")
+                return []
+
+        except Exception as e:
+            print(f"❌ Attempt {attempt + 1}: Error in entity identification: {str(e)}")
+            print(f"❌ Error type: {type(e).__name__}")
+            import traceback
+            print(traceback.format_exc())
+
+            if attempt < max_retries - 1:
+                print(f"🔄 Retrying...")
+            else:
+                print(f"❌ All {max_retries} attempts failed")
+                return []
+
+    return []
 
 
 # ============================================================================
@@ -296,14 +516,20 @@ Define 4-6 journey stages that track this entity's lifecycle through the institu
 - Ensure stages are specific to this entity type
 - Focus on actionable insights at each stage"""
 
+    # Dynamically adapt to model capabilities
+    model_config = detect_model_tier(ollama_model)
+
     try:
+        print(f"  🔄 Calling LLM to define stages for {entity['entity_name']}...")
         stages_json = call_ollama_api(
             prompt=prompt,
             model=ollama_model,
             ollama_url=ollama_url,
-            temperature=0.3,
-            num_predict=1500
+            temperature=model_config["temperature"],  # Adaptive
+            num_predict=model_config["stage_token_limits"][1]  # Use middle value
         ).strip()
+
+        print(f"  📝 Stage response length: {len(stages_json)} chars")
 
         # Clean JSON if wrapped in markdown
         if '```json' in stages_json:
@@ -311,13 +537,31 @@ Define 4-6 journey stages that track this entity's lifecycle through the institu
         elif '```' in stages_json:
             stages_json = stages_json.split('```')[1].split('```')[0].strip()
 
-        stages = json.loads(stages_json)
+        # Remove any text before the first '[' and after the last ']'
+        if '[' in stages_json and ']' in stages_json:
+            start_idx = stages_json.find('[')
+            end_idx = stages_json.rfind(']') + 1
+            stages_json = stages_json[start_idx:end_idx]
 
-        print(f"  ✅ Defined {len(stages)} stages for {entity['entity_name']}")
-        return stages
+        # Use robust JSON parsing
+        stages = parse_json_with_fallback(stages_json)
 
+        if stages and isinstance(stages, list):
+            print(f"  ✅ Defined {len(stages)} stages for {entity['entity_name']}")
+            return stages
+        else:
+            print(f"  ⚠️ JSON parsing failed for stages, returning empty list")
+            return []
+
+    except json.JSONDecodeError as e:
+        print(f"  ❌ JSON parsing error for stages: {str(e)}")
+        if 'stages_json' in locals():
+            print(f"  ❌ Raw response (first 500 chars): {stages_json[:500]}")
+        return []
     except Exception as e:
         print(f"  ❌ Error defining stages for {entity['entity_name']}: {str(e)}")
+        import traceback
+        print(f"  ❌ Traceback: {traceback.format_exc()}")
         return []
 
 
@@ -429,14 +673,20 @@ Generate a compelling narrative that tells the story of what happened to this en
 - **INCLUDE 2-4 visualizations** that best tell the story of this stage
 - Choose visualization types that match the data: pie_chart, bar_chart, line_chart, scatter_plot, stacked_bar, heatmap, histogram"""
 
+    # Dynamically adapt to model capabilities
+    model_config = detect_model_tier(ollama_model)
+
     try:
+        print(f"    🔄 Generating narrative for stage: {stage['stage_name']}...")
         narrative_json = call_ollama_api(
             prompt=prompt,
             model=ollama_model,
             ollama_url=ollama_url,
-            temperature=0.4,
-            num_predict=1000
+            temperature=model_config["temperature"],  # Adaptive
+            num_predict=model_config["narrative_token_limits"][1]  # Use middle value
         ).strip()
+
+        print(f"    📝 Narrative response length: {len(narrative_json)} chars")
 
         # Clean JSON if wrapped in markdown
         if '```json' in narrative_json:
@@ -444,13 +694,43 @@ Generate a compelling narrative that tells the story of what happened to this en
         elif '```' in narrative_json:
             narrative_json = narrative_json.split('```')[1].split('```')[0].strip()
 
-        narrative = json.loads(narrative_json)
+        # Remove any text before the first '{' and after the last '}'
+        if '{' in narrative_json and '}' in narrative_json:
+            start_idx = narrative_json.find('{')
+            end_idx = narrative_json.rfind('}') + 1
+            narrative_json = narrative_json[start_idx:end_idx]
 
-        print(f"    ✅ Generated narrative for {entity['entity_name']} - {stage['stage_name']}")
-        return narrative
+        # Use robust JSON parsing with multiple fallback strategies
+        narrative = parse_json_with_fallback(narrative_json)
 
+        if narrative:
+            print(f"    ✅ Generated narrative for {entity['entity_name']} - {stage['stage_name']}")
+            return narrative
+        else:
+            print(f"    ⚠️ JSON parsing failed, using fallback empty structure")
+            return {
+                "narrative_text": "Narrative generation encountered formatting issues.",
+                "key_metrics": [],
+                "insights": [],
+                "recommendations": [],
+                "visualizations": []
+            }
+
+    except json.JSONDecodeError as e:
+        print(f"    ❌ JSON parsing error for narrative: {str(e)}")
+        if 'narrative_json' in locals():
+            print(f"    ❌ Raw response (first 500 chars): {narrative_json[:500]}")
+        return {
+            "narrative_text": "Narrative generation encountered formatting issues.",
+            "key_metrics": [],
+            "insights": [],
+            "recommendations": [],
+            "visualizations": []
+        }
     except Exception as e:
         print(f"    ❌ Error generating narrative: {str(e)}")
+        import traceback
+        print(f"    ❌ Traceback: {traceback.format_exc()}")
         return {
             "narrative_text": "Error generating narrative.",
             "key_metrics": [],
@@ -478,19 +758,34 @@ def generate_complete_llm_journeys(df: pd.DataFrame, ollama_model: str = "qwen2.
     Returns:
         List of complete journeys with all narratives
     """
+    import sys
 
-    print("\n" + "="*80)
-    print("🚀 STARTING LLM-DRIVEN ENTITY JOURNEY GENERATION")
-    print("="*80 + "\n")
+    print("\n" + "="*80, flush=True)
+    print("🚀 STARTING LLM-DRIVEN ENTITY JOURNEY GENERATION", flush=True)
+    print(f"📊 Dataset: {len(df)} rows, {len(df.columns)} columns", flush=True)
+    print(f"🤖 Model: {ollama_model}", flush=True)
+    print(f"🌐 URL: {ollama_url}", flush=True)
+    print("="*80 + "\n", flush=True)
+    sys.stdout.flush()
 
     all_journeys = []
 
     # PHASE 1: Identify entities
-    print("📊 PHASE 1: Identifying entities from dataset...")
-    entities = identify_entities_from_dataset(df, ollama_model, ollama_url)
+    print("📊 PHASE 1: Identifying entities from dataset...", flush=True)
+    sys.stdout.flush()
+
+    try:
+        entities = identify_entities_from_dataset(df, ollama_model, ollama_url)
+    except Exception as e:
+        print(f"❌ CRITICAL ERROR in identify_entities_from_dataset: {str(e)}", flush=True)
+        import traceback
+        print(traceback.format_exc(), flush=True)
+        sys.stdout.flush()
+        return []
 
     if not entities:
-        print("❌ No entities identified. Aborting.")
+        print("❌ No entities identified. Aborting.", flush=True)
+        sys.stdout.flush()
         return []
 
     print(f"\n✅ Found {len(entities)} entities\n")
